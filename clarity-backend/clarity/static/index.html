@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clarity - Carbon Emissions Calculator & Regulator</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+*{box-sizing:border-box}body{font-family:system-ui,sans-serif;margin:0;background:#f1f6f2;color:#1b2a21}
+header{background:#1f6b45;color:#fff;padding:14px 20px;display:flex;justify-content:space-between;align-items:center}
+main{max-width:1000px;margin:20px auto;padding:0 14px}.card{background:#fff;border-radius:10px;padding:16px;margin-bottom:16px;box-shadow:0 1px 3px #0002}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+input,select,button{padding:9px;margin:4px 0;border-radius:6px;border:1px solid #bbb;width:100%;font-size:14px}
+button{background:#1f6b45;color:#fff;border:0;cursor:pointer}button.sec{background:#fff;color:#1f6b45;border:1px solid #1f6b45}
+.ok{color:#1f6b45}.warning{color:#c27c00}.exceeded{color:#c0392b}.big{font-size:32px;font-weight:700}
+table{width:100%;border-collapse:collapse;font-size:14px}td,th{padding:6px;border-bottom:1px solid #eee;text-align:left}
+.hidden{display:none}small{color:#666}
+</style></head><body>
+<header><h2 style="margin:0">Clarity</h2><div id="who"></div></header>
+<main>
+<div id="authBox" class="card" style="max-width:380px;margin:30px auto">
+  <h3 id="authTitle">Login</h3>
+  <input id="name" placeholder="Name" class="hidden"><input id="email" placeholder="Email"><input id="pw" type="password" placeholder="Password">
+  <button onclick="submitAuth()">Continue</button>
+  <button class="sec" onclick="toggleAuth()" id="toggleBtn">Create an account</button><small id="err" class="exceeded"></small>
+</div>
+<div id="app" class="hidden">
+  <div class="grid">
+    <div class="card"><h3>Add activity</h3>
+      <select id="atype"></select><input id="qty" type="number" step="any" placeholder="Quantity">
+      <input id="adate" type="date"><button onclick="addActivity()">Calculate &amp; save</button><small id="calc"></small></div>
+    <div class="card"><h3>This month</h3><div class="big" id="total">0 kg</div><small>CO2e estimated</small>
+      <input id="month" type="month" onchange="load()"><div id="targets"></div>
+      <button class="sec" onclick="downloadCsv()">Download CSV report</button></div>
+  </div>
+  <div class="grid"><div class="card"><h3>Category breakdown</h3><canvas id="pie"></canvas></div>
+  <div class="card"><h3>6-month trend</h3><canvas id="line"></canvas></div></div>
+  <div class="card"><h3>Recommendations</h3><div id="recs"></div><p id="ai"></p></div>
+  <div class="card"><h3>Set personal monthly target</h3><div class="grid">
+    <select id="tcat"><option value="">Total</option><option>electricity</option><option>fuel</option><option>transport</option><option>waste</option><option>other</option></select>
+    <input id="tlimit" type="number" placeholder="Limit (kg CO2e)"><button onclick="setTarget()">Save target</button></div></div>
+  <div class="card"><h3>Recent activities</h3><table id="acts"></table></div>
+  <small id="disc"></small>
+</div></main>
+<script>
+let token=localStorage.getItem('t'),isReg=false,pie,line;
+const $=id=>document.getElementById(id);
+async function api(path,opt={}){opt.headers=Object.assign({'Content-Type':'application/json'},opt.headers||{});
+  if(token)opt.headers.Authorization='Bearer '+token;const r=await fetch('/api'+path,opt);
+  if(r.status===401){logout();throw new Error('Please log in')}
+  if(!r.ok){const e=await r.json().catch(()=>({}));throw new Error(typeof e.detail==='string'?e.detail:'Invalid input')}
+  return r.status===204?null:(r.headers.get('content-type')||'').includes('json')?r.json():r.text()}
+function toggleAuth(){isReg=!isReg;$('name').classList.toggle('hidden',!isReg);$('authTitle').textContent=isReg?'Register':'Login';$('toggleBtn').textContent=isReg?'I have an account':'Create an account'}
+async function submitAuth(){try{const b={email:$('email').value,password:$('pw').value};if(isReg)b.name=$('name').value;
+  const d=await api(isReg?'/auth/register':'/auth/login',{method:'POST',body:JSON.stringify(b)});
+  token=d.token;localStorage.setItem('t',token);$('who').textContent=d.user.name;start()}catch(e){$('err').textContent=e.message}}
+function logout(){token=null;localStorage.removeItem('t');$('app').classList.add('hidden');$('authBox').classList.remove('hidden');$('who').innerHTML=''}
+async function start(){$('authBox').classList.add('hidden');$('app').classList.remove('hidden');
+  $('who').innerHTML=`<button class="sec" style="width:auto" onclick="logout()">Logout</button>`;
+  $('adate').value=new Date().toISOString().slice(0,10);$('month').value=new Date().toISOString().slice(0,7);
+  const f=await api('/factors');$('atype').innerHTML=f.map(x=>`<option value="${x.activity_type}">${x.label} (${x.unit})</option>`).join('');load()}
+async function addActivity(){try{const a=await api('/activities',{method:'POST',body:JSON.stringify({activity_type:$('atype').value,quantity:+$('qty').value,activity_date:$('adate').value})});
+  $('calc').textContent=a.calculation;load()}catch(e){$('calc').textContent=e.message}}
+async function setTarget(){try{await api('/targets',{method:'PUT',body:JSON.stringify({category:$('tcat').value||null,limit_kg:+$('tlimit').value})});load()}catch(e){alert(e.message)}}
+async function downloadCsv(){const t=await api('/report/csv?month='+$('month').value);const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([t],{type:'text/csv'}));a.download='clarity_'+$('month').value+'.csv';a.click()}
+async function load(){const d=await api('/dashboard?month='+$('month').value);
+  $('total').textContent=d.total_kg+' kg';$('disc').textContent=d.disclaimer;
+  $('targets').innerHTML=d.targets.map(t=>`<p>${t.category}: ${t.used_kg}/${t.limit_kg} kg <b class="${t.status}">${t.percent}% ${t.status}</b> <small>(${t.source})</small></p>`).join('');
+  $('recs').innerHTML=d.recommendations.map(r=>`<p><b>${r.message}</b><ul>${(r.actions||[]).map(a=>`<li>${a}</li>`).join('')}</ul></p>`).join('');
+  $('ai').textContent=d.ai_summary||'';
+  if(pie)pie.destroy();pie=new Chart($('pie'),{type:'doughnut',data:{labels:d.category_breakdown.map(c=>c.category),datasets:[{data:d.category_breakdown.map(c=>c.co2e_kg)}]}});
+  if(line)line.destroy();line=new Chart($('line'),{type:'line',data:{labels:d.trend.map(t=>t.month),datasets:[{label:'kg CO2e',data:d.trend.map(t=>t.total_kg),borderColor:'#1f6b45'}]}});
+  const acts=await api('/activities?limit=15');
+  $('acts').innerHTML='<tr><th>Date</th><th>Activity</th><th>Calculation</th><th></th></tr>'+acts.map(a=>`<tr><td>${a.date}</td><td>${a.label}</td><td>${a.calculation}</td><td><a href="#" onclick="del(${a.id});return false">delete</a></td></tr>`).join('')}
+async function del(id){await api('/activities/'+id,{method:'DELETE'});load()}
+if(token)start().catch(()=>{});
+</script></body></html>
